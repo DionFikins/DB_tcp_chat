@@ -4,17 +4,35 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <string.h>
+#include <thread>
+#include <vector>
 #include "databaseConnection.cpp"
+#include "Logger.h"
 
 #define PORT 7777
 
 using std::cout;
 using std::endl;
 
-PGconn* conn = conDB();
+Logger logger("log.txt");
 
+PGconn* conn = conDB();
 std::string messages;
 int output, input, chatid;
+
+std::vector<std::thread> threads;
+
+void writer(Logger& logger, std::string ms) {
+    logger.writeLog(ms);
+}
+void reader(Logger& logger, std::string ms) {
+    std::string log = logger.readLog();
+    if(!log.empty())
+        std::cout << log << std::endl;
+}
+void joinThread() {
+    for(auto& t : threads) t.join();
+}
 
 class Server {
     protected:
@@ -107,8 +125,9 @@ class Server {
                                     chatid = queryDBInt(conn, st.str().c_str());
                                     SendMessageOneUser(socketD, choice, output, chatid);
                                 }
-                                
                             } else if(choice == "3") {
+                                OpenChatAll(socketD, choice, output);
+                            } else if(choice == "4") {
                                 EnterMessage(querySelect(conn, "select * from users") + "\nselect login for input message\n");
                                 std::string tst = OnMessage();
                                 std::stringstream res;
@@ -133,10 +152,6 @@ class Server {
                                     OpenOneChat(socketD, choice, input, output, chatid);
                                 }
                                 else EnterMessage("Non chat");
-                            } else if(choice == "4") {
-                                //EnterMessage(userB.ShowAllUser() + "\nselect login for open chat");
-                                //input = OnMessage(); 
-                                //OpenOneChat(socketD, choice, output, input);
                             } else if(choice == "5") {
                                 RebindLogin(socketD, choice, output);
                                 break;
@@ -244,25 +259,31 @@ class Server {
             std::string text = OnMessage();
             std::stringstream query;
             query << "insert into all_chat(id_user, message_chatall) values(" << output << ", " << PQescapeLiteral(conn, text.c_str(), text.length()) << ")";
+            threads.emplace_back(writer, std::ref(logger), "0 " + std::to_string(output) + " " + text);
             queryDB(conn, query.str().c_str());
             EnterMessage("Message upload\n");
         }
         void SendMessageOneUser(int socketD, std::string choice, int output, int chatid) {
             EnterMessage("Send message: ");
             std::string text = OnMessage();
-            
             std::stringstream option;
+            threads.emplace_back(writer, std::ref(logger), std::to_string(chatid) + " " + std::to_string(output)+ " " + text);
+            joinThread();
             option << "insert into msg_usr_chat(id_chat, id_user_upload, message_chat) values(" << chatid << ", " << output << ", '" << text << "')";
             queryDB(conn, option.str().c_str());
             EnterMessage("Message upload\n");
         }
         void OpenChatAll(int socketD, std::string choice, int output) {
             EnterMessage(querySelect(conn, "select * from all_chat"));
+            threads.emplace_back(reader, std::ref(logger), "0");
+            joinThread();
         }
         void OpenOneChat(int socketD, std::string choice, int output, int input, int chatid) {
             std::stringstream que;
             que << "select usr.name_user, message_chat from msg_usr_chat muc inner join users usr on muc.id_user_upload = usr.id_user";
             EnterMessage(querySelect(conn, que.str().c_str()));
+            threads.emplace_back(reader, std::ref(logger), std::to_string(chatid));
+            joinThread();
         }
         void RebindLogin(int socketD, std::string choice, int output) {
             EnterMessage("Enter new login: \n");
